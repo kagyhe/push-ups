@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Push Arena — Push-up Challenge</title>
+<style>
+:root{--bg:#080b12;--card:#111722;--muted:#8e99ab;--text:#f7f9fc;--accent:#69f0ae;--accent2:#6ea8ff;--danger:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -10%,#172238 0,#080b12 45%);color:var(--text);font:15px/1.45 Inter,system-ui,sans-serif}
+.wrap{max-width:1120px;margin:auto;padding:28px 18px 50px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.logo{font-weight:900;letter-spacing:-.04em;font-size:25px}.logo span{color:var(--accent)}
+.pill{border:1px solid #273144;background:#101622;padding:8px 12px;border-radius:999px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1.5fr .8fr;gap:18px}.card{background:rgba(17,23,34,.88);border:1px solid #222c3d;border-radius:22px;box-shadow:0 18px 50px #0006;overflow:hidden}
+.stage{position:relative;aspect-ratio:16/10;background:#05070b;display:flex;align-items:center;justify-content:center}.stage video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}.stage canvas{position:absolute;inset:0;width:100%;height:100%;display:none}.placeholder{padding:30px;text-align:center;color:var(--muted)}.placeholder b{display:block;color:white;font-size:22px;margin-bottom:8px}
+.controls{display:flex;gap:10px;padding:16px;border-top:1px solid #222c3d}.btn{border:0;border-radius:13px;padding:12px 16px;font-weight:800;cursor:pointer;background:#202a3a;color:white}.btn.primary{background:var(--accent);color:#06100b}.btn:disabled{opacity:.45;cursor:not-allowed}
+.stats{padding:20px}.big{font-size:78px;line-height:.95;font-weight:950;letter-spacing:-.06em;margin:8px 0}.label{color:var(--muted)}.row{display:flex;justify-content:space-between;padding:13px 0;border-bottom:1px solid #202037}.row:last-child{border:0}.value{font-weight:850}
+.progress{height:9px;background:#202938;border-radius:9px;overflow:hidden;margin:10px 0 18px}.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s}
+.tip{margin-top:16px;padding:13px 14px;border-radius:14px;background:#0d131e;color:#b7c1d0}
+.badge{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:#b7c1d0;background:#0c121b;border:1px solid #253044;padding:6px 9px;border-radius:99px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}.big{font-size:64px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="logo">PUSH<span>ARENA</span></div>
+    <div class="pill">LIVE TRAINING MODE</div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <div class="stage">
+        <video id="video" playsinline></video>
+        <canvas id="canvas"></canvas>
+        <div class="placeholder" id="placeholder">
+          <b>Готов к челленджу?</b>
+          Разреши доступ к камере — сайт будет отслеживать положение тела и считать повторения.
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn primary" id="start">Включить камеру</button>
+        <button class="btn" id="reset" disabled>Сбросить</button>
+      </div>
+      <div style="padding:0 16px 16px;color:#7f8b9d;font-size:12px">
+        Для доступа к камере открой файл через <b style="color:#b9c4d5">HTTPS</b> или <b style="color:#b9c4d5">localhost</b>, а не напрямую через file://.
+      </div>
+    </section>
+
+    <aside class="card stats">
+      <span class="badge">● AUTO REP COUNT</span>
+      <div class="label" style="margin-top:20px">Отжимания</div>
+      <div class="big" id="count">0</div>
+      <div class="label">Цель: <span id="goalText">20</span></div>
+      <div class="progress"><i id="bar"></i></div>
+      <div class="row"><span>Темп</span><span class="value" id="pace">—</span></div>
+      <div class="row"><span>Статус</span><span class="value" id="status">Ожидание</span></div>
+      <div class="row"><span>Лучший результат</span><span class="value" id="best">0</span></div>
+      <div class="tip" id="tip">Совет: поставь камеру сбоку, чтобы плечо, таз и колено были видны целиком.</div>
+    </aside>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+<script>
+const video=document.getElementById('video'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+const start=document.getElementById('start'),reset=document.getElementById('reset'),placeholder=document.getElementById('placeholder');
+const countEl=document.getElementById('count'),bar=document.getElementById('bar'),statusEl=document.getElementById('status'),paceEl=document.getElementById('pace'),bestEl=document.getElementById('best'),tip=document.getElementById('tip');
+let count=0,state='up',repTimes=[],running=false,best=Number(localStorage.getItem('pusharena-best')||0);bestEl.textContent=best;
+
+function angle(a,b,c){
+ const ab=Math.atan2(a.y-b.y,a.x-b.x), cb=Math.atan2(c.y-b.y,c.x-b.x);
+ let d=Math.abs((ab-cb)*180/Math.PI); return d>180?360-d:d;
+}
+function dist(a,b){
+ return Math.hypot(a.x-b.x, a.y-b.y);
+}
+function setCount(n){count=n;countEl.textContent=n;bar.style.width=Math.min(100,n/20*100)+'%';if(n>best){best=n;bestEl.textContent=n;localStorage.setItem('pusharena-best',n)}}
+function resetAll(){setCount(0);state='up';repTimes=[];paceEl.textContent='—';statusEl.textContent='Готов';tip.textContent='Камера сбоку даёт более точный подсчёт.'}
+reset.onclick=resetAll;
+
+const pose=new Pose({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`});
+pose.setOptions({modelComplexity:0,smoothLandmarks:true,minDetectionConfidence:.5,minTrackingConfidence:.5});
+
+pose.onResults(r=>{
+ if(!running)return;
+ canvas.width=video.videoWidth||1280;canvas.height=video.videoHeight||720;
+ ctx.clearRect(0,0,canvas.width,canvas.height);
+
+ if(r.poseLandmarks){
+   drawConnectors(ctx,r.poseLandmarks,POSE_CONNECTIONS,{color:'#69f0ae',lineWidth:3});
+   drawLandmarks(ctx,r.poseLandmarks,{color:'#fff',lineWidth:1,radius:3});
+   
+   const p=r.poseLandmarks;
+   
+   // Выбираем сторону (левую или правую), которая ближе/видимее
+   const leftVis = (p[11].visibility||0) + (p[13].visibility||0) + (p[15].visibility||0);
+   const rightVis = (p[12].visibility||0) + (p[14].visibility||0) + (p[16].visibility||0);
+   
+   const isLeft = leftVis >= rightVis;
+   const shoulder = isLeft ? p[11] : p[12];
+   const elbow = isLeft ? p[13] : p[14];
+   const wrist = isLeft ? p[15] : p[16];
+   const hip = isLeft ? p[23] : p[24];
+   const knee = isLeft ? p[25] : p[26];
+
+   if(shoulder && hip && elbow && wrist){
+     const elbowAngle = angle(shoulder, elbow, wrist);
+     const bodyAngle = angle(shoulder, hip, knee || hip); 
+     const now = performance.now();
+
+     // 1. Запястье должно быть существенно НИЖЕ плеча по оси Y (в координатах экрана Y идет сверху вниз)
+     // Это полностью убирает ложные срабатывания от мимики лица и поднесения рук к голове
+     const isWristOnGround = (wrist.y - shoulder.y) > 0.12; 
+
+     // 2. Корпус находится в горизонтальном положении планки (не стоя и не сидя)
+     const isPlank = bodyAngle > 110; 
+
+     if (isWristOnGround && isPlank) {
+       // Вычисляем вертикальную дистанцию от плеча до кисти относительно длины предплечья
+       const armLength = dist(shoulder, elbow) + dist(elbow, wrist);
+       const verticalDrop = (wrist.y - shoulder.y) / (armLength || 1);
+
+       // Нижняя точка: согнутый локоть (< 115°) ИЛИ плечо опустилось очень низко к полу
+       if ((elbowAngle < 115 || verticalDrop < 0.45) && state === 'up') {
+         state = 'down';
+         statusEl.textContent = 'Внизу';
+         tip.textContent = 'Хорошо. Теперь выпрями руки.';
+       }
+
+       // Верхняя точка: выпрямленный локоть (> 140°)
+       if (elbowAngle > 140 && state === 'down') {
+         state = 'up';
+         setCount(count + 1);
+         
+         repTimes.push(now); 
+         repTimes = repTimes.filter(t => now - t < 30000);
+         
+         if (repTimes.length >= 2) {
+           const avg = (repTimes[repTimes.length - 1] - repTimes[0]) / (repTimes.length - 1);
+           paceEl.textContent = (60000 / avg).toFixed(1) + ' / мин';
+         }
+         
+         statusEl.textContent = count >= 20 ? 'Цель достигнута!' : 'Вверх';
+         if (count >= 20) tip.textContent = '🔥 Цель выполнена. Можно продолжать и ставить новый рекорд.';
+       }
+     } else {
+       // Если пользователь сменил позицию, сбрасываем состояние
+       if (state === 'down' && !isWristOnGround) {
+         state = 'up';
+       }
+     }
+   }
+ } else {
+   statusEl.textContent = 'Нет человека';
+   tip.textContent = 'Отойди чуть дальше и убедись, что всё тело попадает в кадр.';
+ }
+
+ ctx.save();
+ ctx.scale(-1, 1);
+ ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+ ctx.restore();
+
+ if(r.poseLandmarks){
+   drawConnectors(ctx,r.poseLandmarks,POSE_CONNECTIONS,{color:'#69f0ae',lineWidth:3});
+   drawLandmarks(ctx,r.poseLandmarks,{color:'#fff',lineWidth:1,radius:3});
+ }
+});
+
+let cam;
+start.onclick=async()=>{
+ if(running)return;
+ try{
+   if(!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'){
+     throw new Error('SECURE_CONTEXT: Открой сайт через HTTPS или http://localhost — браузер не разрешает камеру на обычном file://');
+   }
+   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+     throw new Error('GET_USER_MEDIA_UNAVAILABLE: Этот браузер не предоставляет доступ к камере на этой странице.');
+   }
+   statusEl.textContent='Запрашиваем камеру…';
+   tip.textContent='Если браузер покажет запрос — нажми «Разрешить».';
+   const stream=await navigator.mediaDevices.getUserMedia({
+     video:{facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720}},
+     audio:false
+   });
+   video.srcObject=stream;
+   await video.play();
+   running=true;
+   placeholder.style.display='none';video.style.display='block';canvas.style.display='block';start.disabled=true;reset.disabled=false;statusEl.textContent='Сканирование';
+   cam=new Camera(video,{onFrame:async()=>{await pose.send({image:video})},width:1280,height:720});cam.start();
+ }catch(e){
+   console.error('Camera error:', e);
+   statusEl.textContent='Ошибка камеры';
+   const name=e?.name || 'UnknownError';
+   let msg=e?.message || 'Неизвестная ошибка';
+   if(name==='NotAllowedError') msg='Доступ к камере запрещён. Разреши камеру для этого сайта в настройках браузера.';
+   else if(name==='NotFoundError') msg='Камера не найдена.';
+   else if(name==='NotReadableError') msg='Камера занята другим приложением.';
+   else if(name==='SecurityError') msg='Браузер заблокировал доступ. Используй HTTPS или localhost.';
+   tip.textContent=`${name}: ${msg}`;
+   start.disabled=false;
+ }
+};
+</script>
+</body>
+</html>
+
+
